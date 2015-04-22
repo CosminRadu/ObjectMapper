@@ -3,6 +3,8 @@ ObjectMapper
 
 <!-- [![Build Status](https://travis-ci.org/Hearst-DD/ObjectMapper.svg?branch=master)](https://travis-ci.org/Hearst-DD/ObjectMapper) -->
 
+This is a fork of [Hearst-DD/ObjectMapper](https://github.com/Hearst-DD/ObjectMapper). Its purpose - to add polymorphism support to the framework.
+
 ObjectMapper is a framework written in Swift that makes it easy for you to convert your Model objects (Classes and Structs) to and from JSON. 
 
 - [Features](#features)

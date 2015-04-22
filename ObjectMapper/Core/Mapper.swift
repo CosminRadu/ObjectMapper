@@ -109,11 +109,95 @@ private func valueFor(keyPathComponents: [String], dictionary: [String : AnyObje
 	return nil
 }
 
+/*
+* Specifies the JSON type tag
+*	ContractDataJson - "__type"
+*	JsonDotNetJson   - "$type"
+*	Custom
+*/
+public enum JsonSerializationTypeTag {
+	case Default, ContractDataJson, JsonDotNetJson
+	case Custom(String)
+}
+
+/**
+* The MappableInfo class provides convenience methods for configuring polymorphic support in
+* the JSON serialization/deserialization framework
+*/
+public final class MappableInfo<T: Mappable> {
+	/** A generated hashable key per-T, allowing storage of per-type information in a Dictionary */
+	private static var objId: ObjectIdentifier {
+		return ObjectIdentifier(T.self)
+	}
+	
+	/** This method is independent from <T>. It's here only to avoid defining yet another type */
+	public static func reset() {
+		MapperBase.reset()
+	}
+	
+	/** This method is independent from <T>. It's here only to avoid defining yet another type */
+	public static func setJsonSerializationTypeTag(style: JsonSerializationTypeTag) {
+		MapperBase.jsonStyle = style
+	}
+	
+	/**
+	This method associates the native type T with the passed in jsonTypeName. 
+	On deserialization the occurrence of jsonTypeName in a "$type"/"__type" field is treated as an
+	indication to create an instance of <T>.
+	On serialization, instances of type <T> will include a "$type"/"__type" field in their JSON
+	representation.
+	*/
+	public static func configure(jsonTypeName: String) {
+		MapperBase.factories[jsonTypeName] = { map in T(map) as Mappable? }
+		MapperBase.native2jsonTypeName[objId] = jsonTypeName
+	}
+
+	internal static func getFactory(jsonTypeName: String) -> (Map -> Mappable?)? {
+		return MapperBase.factories[jsonTypeName]
+	}
+
+	internal static func getJsonTypeNameFromType(nativeType: T.Type) -> String? {
+		return MapperBase.native2jsonTypeName[ObjectIdentifier(nativeType)]
+	}
+	
+	internal static func getJsonSerializationTypeTag() -> String {
+		switch MapperBase.jsonStyle {
+		case .Default:
+			fallthrough
+		case .ContractDataJson:
+			return "__type"
+		case .JsonDotNetJson:
+			return "$type"
+		case .Custom(let tag):
+			return tag
+		}
+	}
+}
+
+/*
+* MapperBase is an internal type that stores the common Mapper<> configuration. This is a non-generic
+* class that allows for its fields to be shared across all the generic Mapper instances. This
+* architecture enables deserialization of heterogeneous class hierarchies without the need for 
+* extending the Mappable protocol, or for passing this metadata in each call, and then somehow
+* propagating it as the deserialization proceeds
+*/
+public class MapperBase {
+	internal static var jsonStyle: JsonSerializationTypeTag = .Default
+	internal static var factories: [String : Map -> Mappable?] = [:]
+	internal static var native2jsonTypeName: [ObjectIdentifier : String] = [:]
+	internal static func reset() {
+		jsonStyle = .Default
+		factories = [:]
+		native2jsonTypeName = [:]
+	}
+}
+
 /**
 * The Mapper class provides methods for converting Model objects to JSON and methods for converting JSON to Model objects
 */
-public final class Mapper<N: Mappable> {
-	public init(){
+public final class Mapper<N: Mappable>: MapperBase {
+
+	public override init() {
 
 	}
 	
@@ -178,7 +262,13 @@ public final class Mapper<N: Mappable> {
 	*/
 	public func map(JSONDictionary: [String : AnyObject]) -> N? {
 		let map = Map(mappingType: .FromJSON, JSONDictionary: JSONDictionary)
-		let object = N(map)
+		var object: N?
+		if let jsonTypeName = getJsonTypeName(JSONDictionary) {
+			object = MappableInfo<N>.getFactory(jsonTypeName)?(map) as! N?
+		}
+		if object == nil {
+			object = N(map)
+		}
 		return object
 	}
 
@@ -260,6 +350,10 @@ public final class Mapper<N: Mappable> {
 	*/
 	public func toJSON(var object: N) -> [String : AnyObject] {
 		let map = Map(mappingType: .ToJSON, JSONDictionary: [:])
+		if let jsonTypeName = MappableInfo<N>.getJsonTypeNameFromType(object.dynamicType) {
+			let typeTag = MappableInfo<N>.getJsonSerializationTypeTag()
+			map.JSONDictionary[typeTag] = jsonTypeName
+		}
 		object.mapping(map)
 		return map.JSONDictionary
 	}
@@ -335,9 +429,23 @@ public final class Mapper<N: Mappable> {
 		if let data = data {
 			var error: NSError?
 			let parsedJSON: AnyObject? = NSJSONSerialization.JSONObjectWithData(data, options: NSJSONReadingOptions.AllowFragments, error: &error)
+			if parsedJSON == nil {
+				println("Error parsing JSON: \(error!)")
+			}
 			return parsedJSON
 		}
 
+		return nil
+	}
+	
+	/**
+	* Retrieves type/polymorphism indicators in JSONDictionary (__subclass and __type)
+	*/
+	private func getJsonTypeName(jsonDictionary: [String : AnyObject]) -> String? {
+		let typeTag = MappableInfo<N>.getJsonSerializationTypeTag()
+		if let typeHint = jsonDictionary[typeTag] as? String {
+			return typeHint
+		}
 		return nil
 	}
 }
